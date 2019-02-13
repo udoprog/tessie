@@ -1,0 +1,20 @@
+[package]
+name = "tessie"
+version = "0.1.0"
+authors = ["John-John Tedro <udoprog@tedro.se>"]
+edition = "2018"
+license = "MIT/Apache-2.0"
+
+description = """
+A small tool to simplify fast transcoding through ffmpeg.
+"""
+
+documentation = "https://docs.rs/tessie"
+homepage = "https://github.com/udoprog/tessie"
+repository = "https://github.com/udoprog/tessie"
+
+readme = "README.md"
+
+[dependencies]
+failure = "0.1"
+clap = "2.32.0"
