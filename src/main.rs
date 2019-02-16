@@ -10,6 +10,8 @@ const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 pub enum Format {
     /// YouTube-optimized format (1080p @ 60fps)
     YouTube,
+    /// High-quality GIF.
+    Gif,
 }
 
 impl Format {
@@ -18,8 +20,10 @@ impl Format {
 
         match *self {
             YouTube => {
-                cmd.args(&["-y", "-hwaccel", "cuvid", "-c:v", "h264_cuvid", "-i"]);
-            }
+                cmd.args(&["-y", "-hwaccel", "cuvid", "-c:v", "h264_cuvid"]);
+            },
+            _ => {
+            },
         }
     }
 
@@ -32,7 +36,10 @@ impl Format {
         match *self {
             YouTube => {
                 output.set_extension("mp4");
-            }
+            },
+            Gif => {
+                output.set_extension("gif");
+            },
         }
 
         output
@@ -73,6 +80,14 @@ impl Format {
                     "-f",
                     "mp4",
                 ]);
+            },
+            Gif => {
+                cmd.args(&[
+                    "-filter_complex",
+                    "[0:v] fps=12,scale=280:-1,split [a][b];[a] palettegen [p];[b][p] paletteuse",
+                    "-f",
+                    "gif",
+                ]);
             }
         }
     }
@@ -81,6 +96,7 @@ impl Format {
 /// ffmpeg abstraction.
 struct Ffmpeg {
     start: Option<String>,
+    end: Option<String>,
     duration: Option<String>,
 }
 
@@ -99,6 +115,7 @@ impl Ffmpeg {
 
         Ok(Ffmpeg {
             start: None,
+            end: None,
             duration: None,
         })
     }
@@ -116,11 +133,16 @@ impl Ffmpeg {
             cmd.args(&["-ss", start.as_str()]);
         }
 
+        if let Some(end) = self.end.as_ref() {
+            cmd.args(&["-to", end.as_str()]);
+        }
+
         if let Some(duration) = self.duration.as_ref() {
             cmd.args(&["-t", duration.as_str()]);
         }
 
         format.input_args(&mut cmd);
+        cmd.arg("-i");
         cmd.arg(input.as_ref());
         format.output_args(&mut cmd);
         cmd.arg(output.as_ref());
@@ -146,15 +168,21 @@ fn opts() -> clap::App<'static, 'static> {
         .arg(
             clap::Arg::with_name("format")
                 .help(
-                    "The format of the transcode (default: YouTube). Available formats: `YouTube`.",
+                    "The format of the transcode (default: YouTube). Available formats: YouTube, Gif.",
                 )
                 .short("f")
                 .takes_value(true),
         )
         .arg(
             clap::Arg::with_name("start")
-                .help("Where the transcoding should start.")
+                .help("At which timestamp we should transcode from.")
                 .short("s")
+                .takes_value(true),
+        )
+        .arg(
+            clap::Arg::with_name("end")
+                .help("At which timestamp the transcoding should end.")
+                .short("e")
                 .takes_value(true),
         )
         .arg(
@@ -172,10 +200,12 @@ fn main() -> Result<(), failure::Error> {
 
     let format = match m.value_of("format") {
         None | Some("YouTube") => Format::YouTube,
+        Some("Gif") => Format::Gif,
         Some(other) => bail!("illegal --format: {}", other),
     };
 
     ffmpeg.start = m.value_of("start").map(String::from);
+    ffmpeg.end = m.value_of("end").map(String::from);
     ffmpeg.duration = m.value_of("duration").map(String::from);
 
     let input = m
