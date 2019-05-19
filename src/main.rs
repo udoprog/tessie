@@ -12,6 +12,8 @@ pub enum Format {
     YouTube,
     /// High-quality GIF.
     Gif,
+    /// Copy input parameters.
+    Copy,
 }
 
 impl Format {
@@ -21,14 +23,13 @@ impl Format {
         match *self {
             YouTube => {
                 cmd.args(&["-y", "-hwaccel", "cuvid", "-c:v", "h264_cuvid"]);
-            },
-            _ => {
-            },
+            }
+            _ => {}
         }
     }
 
     /// Construct an output file based on the input.
-    pub fn output_file(&self, input: &Path) -> PathBuf {
+    pub fn output_file(&self, input: &Path) -> Result<PathBuf, failure::Error> {
         use self::Format::*;
 
         let mut output = input.to_owned();
@@ -36,13 +37,21 @@ impl Format {
         match *self {
             YouTube => {
                 output.set_extension("mp4");
-            },
+            }
             Gif => {
                 output.set_extension("gif");
-            },
+            }
+            Copy => {
+                let e = match output.extension().and_then(|s| s.to_str()) {
+                    Some(ext) => ext.to_string(),
+                    None => failure::bail!("expected extension: {}", output.display()),
+                };
+
+                output.set_extension(format!("copy.{}", e));
+            }
         }
 
-        output
+        Ok(output)
     }
 
     pub fn output_args(&self, cmd: &mut process::Command) {
@@ -80,7 +89,7 @@ impl Format {
                     "-f",
                     "mp4",
                 ]);
-            },
+            }
             Gif => {
                 cmd.args(&[
                     "-filter_complex",
@@ -89,12 +98,17 @@ impl Format {
                     "gif",
                 ]);
             }
+            Copy => {
+                cmd.args(&["-c:v", "copy", "-c:a", "copy"]);
+            }
         }
     }
 }
 
 /// ffmpeg abstraction.
+#[derive(Default)]
 struct Ffmpeg {
+    map: Vec<String>,
     start: Option<String>,
     end: Option<String>,
     duration: Option<String>,
@@ -113,11 +127,7 @@ impl Ffmpeg {
             bail!("could not run: ffmpeg --version`: {:?}", o);
         }
 
-        Ok(Ffmpeg {
-            start: None,
-            end: None,
-            duration: None,
-        })
+        Ok(Ffmpeg::default())
     }
 
     /// Transcode a single file from input to output.
@@ -144,8 +154,16 @@ impl Ffmpeg {
         format.input_args(&mut cmd);
         cmd.arg("-i");
         cmd.arg(input.as_ref());
+
+        for m in &self.map {
+            cmd.arg("-map");
+            cmd.arg(m);
+        }
+
         format.output_args(&mut cmd);
         cmd.arg(output.as_ref());
+
+        println!("{:?}", cmd);
 
         if !cmd.status()?.success() {
             bail!("failed to run command");
@@ -186,6 +204,13 @@ fn opts() -> clap::App<'static, 'static> {
                 .takes_value(true),
         )
         .arg(
+            clap::Arg::with_name("map")
+                .short("m")
+                .help("Map tracks (0:0 is usually video, 0:1=first audio).")
+                .multiple(true)
+                .takes_value(true),
+        )
+        .arg(
             clap::Arg::with_name("duration")
                 .help("How long the transcoding should be.")
                 .short("d")
@@ -199,11 +224,16 @@ fn main() -> Result<(), failure::Error> {
     let mut ffmpeg = Ffmpeg::new()?;
 
     let format = match m.value_of("format") {
-        None | Some("YouTube") => Format::YouTube,
-        Some("Gif") => Format::Gif,
+        None | Some("youtube") | Some("YouTube") => Format::YouTube,
+        Some("gif") | Some("Gif") => Format::Gif,
+        Some("copy") | Some("Copy") => Format::Copy,
         Some(other) => bail!("illegal --format: {}", other),
     };
 
+    ffmpeg.map = m
+        .values_of("map")
+        .map(|o| o.map(|s| s.to_string()).collect())
+        .unwrap_or_default();
     ffmpeg.start = m.value_of("start").map(String::from);
     ffmpeg.end = m.value_of("end").map(String::from);
     ffmpeg.duration = m.value_of("duration").map(String::from);
@@ -212,7 +242,7 @@ fn main() -> Result<(), failure::Error> {
         .value_of("input")
         .map(PathBuf::from)
         .ok_or_else(|| format_err!("missing <input> argument"))?;
-    let output = format.output_file(&input);
+    let output = format.output_file(&input)?;
 
     if output.is_file() {
         bail!("output already exists: {}", output.display());
